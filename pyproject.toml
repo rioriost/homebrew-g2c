@@ -1,0 +1,39 @@
+[project]
+name = "g2c"
+authors = [
+    {name = "Rio Fujita", email = "rifujita@microsoft.com"},
+]
+version = "0.1.0"
+license = {file = "LICENSE"}
+description = "g2c is a python script to convert Gremlin query to Cypher query with OpenAI API"
+readme = "README.md"
+
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.63.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/rioriost/homebrew-g2c"
+Issues = "https://github.com/rioriost/homebrew-g2c/issues"
+
+[project.scripts]
+g2c = "g2c.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/g2c"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/g2c/*.py",
+  "*.py",
+]
+exclude = [
+  "g2c.rb",
+  "uv.lock",
+  "dist/.DS_Store",
+]
