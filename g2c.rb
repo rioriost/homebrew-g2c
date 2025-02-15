@@ -8,13 +8,21 @@ class G2c < Formula
   license "MIT"
 
   depends_on "python@3.11"
-  depends_on "certifi"
-  depends_on "httpx"
   depends_on "rust" => :build
 
   resource "openai" do
     url "https://files.pythonhosted.org/packages/4f/32/2049e973a646801df425aecdf88c6504ca878bdb3951fe12076fc30f2977/openai-1.63.0.tar.gz"
     sha256 "597d7a1b35b113e5a09fcb953bdb1eef44f404a39985f3d7573b3ab09221fd66"
+  end
+
+  resource "certifi" do
+    url "https://files.pythonhosted.org/packages/1c/ab/c9f1e32b7b1bf505bf26f0ef697775960db7932abeb7b516de930ba2705f/certifi-2025.1.31.tar.gz"
+    sha256 "3d5da6925056f6f18f119200434a4780a94263f10d1c21d032a6f6b2baa20651"
+  end
+
+  resource "httpx" do
+    url "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz"
+    sha256 "75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc"
   end
 
   resource "pydantic" do
