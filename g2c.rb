@@ -10,6 +10,7 @@ class G2c < Formula
   depends_on "python@3.11"
   depends_on "certifi"
   depends_on "httpx"
+  depends_on "rust" => :build
 
   resource "openai" do
     url "https://files.pythonhosted.org/packages/4f/32/2049e973a646801df425aecdf88c6504ca878bdb3951fe12076fc30f2977/openai-1.63.0.tar.gz"
