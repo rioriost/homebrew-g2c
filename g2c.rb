@@ -3,8 +3,8 @@ class G2c < Formula
 
   desc "g2c is a python script to convert Gremlin query to Cypher query with OpenAI API"
   homepage "https://github.com/rioriost/homebrew-g2c/"
-  url "https://files.pythonhosted.org/packages/5a/29/237484a02d2e19b1c82c9371afb9c40a8a48f40fb56c0448c9a1818e1c01/g2c-0.2.0.tar.gz"
-  sha256 "2dc9d2c3e708ad8076087498d619508683c15c3035f9b62cf45167bd31eab932"
+  url "https://files.pythonhosted.org/packages/09/03/8412243a8d1eaedb2301fee218250ee212d18d5a1d7b20f8b8e8a410879f/g2c-0.2.1.tar.gz"
+  sha256 "d96dc1e6368308655040b46a7be9989a736360d3dedfc54a9cc8016d8ec2a3b7"
   license "MIT"
 
   depends_on "python@3.11"
