@@ -3,7 +3,7 @@ name = "g2c"
 authors = [
     {name = "Rio Fujita", email = "rifujita@microsoft.com"},
 ]
-version = "0.1.0"
+version = "0.2.0"
 license = {file = "LICENSE"}
 description = "g2c is a python script to convert Gremlin query to Cypher query with OpenAI API"
 readme = "README.md"
@@ -30,6 +30,7 @@ packages = ["src/g2c"]
 [tool.hatch.build.targets.sdist]
 include = [
   "src/g2c/*.py",
+  "src/g2c/packaged_data/*",
   "*.py",
 ]
 exclude = [
