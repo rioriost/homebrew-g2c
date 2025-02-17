@@ -10,11 +10,6 @@ class G2c < Formula
   depends_on "python@3.11"
   depends_on "rust" => :build
 
-  resource "antlr4-python3-runtime" do
-    url "https://files.pythonhosted.org/packages/b4/b3/4a0bfb56df8cda20f16aab8365272e7d76196631040aff0694f261270000/antlr3_python_runtime-3.4.tar.gz"
-    sha256 "bfb55d035ee493021d73478ddcfcd3cfa2e04a4d3629da305d9c52850caf2259"
-  end
-
   resource "openai" do
     url "https://files.pythonhosted.org/packages/4f/32/2049e973a646801df425aecdf88c6504ca878bdb3951fe12076fc30f2977/openai-1.63.0.tar.gz"
     sha256 "597d7a1b35b113e5a09fcb953bdb1eef44f404a39985f3d7573b3ab09221fd66"
@@ -82,6 +77,7 @@ class G2c < Formula
 
   def install
     virtualenv_install_with_resources
+    system libexec/"bin/python", "-m", "pip", "install", "antlr4-python3-runtime"
   end
 
   test do
