@@ -7,15 +7,15 @@ nox.options.default_venv_backend = "uv"
 @nox.session(python=["3.11"], tags=["lint"])
 def lint(session):
     session.install("ruff")
-    session.run("uv", "run", "ruff", "check")
-    session.run("uv", "run", "ruff", "format")
+    session.run("uv", "run", "ruff", "check", "src/g2c/main.py")
+    session.run("uv", "run", "ruff", "format", "src/g2c/main.py")
 
 
 @nox.session(python=["3.11"], tags=["mypy"])
 def mypy(session):
     session.install(".")
-    session.install("mypy")
-    session.run("uv", "run", "mypy", "src")
+    session.install("mypy", "types-antlr4-python3-runtime")
+    session.run("uv", "run", "mypy", "src/g2c/main.py", "--follow-imports=skip")
 
 
 @nox.session(python=["3.11"], tags=["pytest"])

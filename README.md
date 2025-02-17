@@ -34,12 +34,13 @@ Execute g2c command.
 
 ```bash
 g2c --help
-usage: g2c [-h] (-g GREMLIN | -f FILEPATH | -u URL)
+usage: g2c [-h] [-a] (-g GREMLIN | -f FILEPATH | -u URL)
 
 Convert Gremlin queries to Cypher queries.
 
 options:
   -h, --help            show this help message and exit
+  -a, --age             Convert to the Cypher query for Apache AGE.
   -g GREMLIN, --gremlin GREMLIN
                         The Gremlin query to convert.
   -f FILEPATH, --filepath FILEPATH
@@ -102,7 +103,22 @@ MATCH (n) WHERE id(n) = 'vertexId' RETURN n
 ......
 ```
 
+with -a(--age)
+
+```bash
+g2c -a -g "g.V().hasLabel('person').aggregate('a')"
+Converted Cypher queries:
+
+line 1, g.V().hasLabel('person').aggregate('a') ->
+SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n:person) WITH collect(n) AS a RETURN a $$) AS (a agtype, n agtype);
+```
+
 ## Release Notes
+
+### 0.3.0 Release
+* Refactored the code
+* Fixed a bug to save a cache. If you're using the old versions, please delete the .g2c_cache file under your home directory.
+* Added '--age' argument to convert Gremlin query to Cypher using Apache AGE
 
 ### 0.2.0 Release
 * Changed the default behaviour to accept a Gremlin query (-g), a file (-f), or a URL (-u).
@@ -114,3 +130,6 @@ MATCH (n) WHERE id(n) = 'vertexId' RETURN n
 
 ## License
 MIT License
+
+Cypher.interp, Cypher.tokens, CypherLexer.interp, CypherLexer.py, CypherLexer.tokens, CypherListener.py, CypherParser.py, and CypherVisitor.py under src/g2c/ were generated from [Cypher.g4](https://github.com/cloudprivacylabs/opencypher/blob/main/Cypher.g4)
+Apache License, Version 2.0
