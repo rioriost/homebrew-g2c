@@ -77,6 +77,7 @@ class G2c < Formula
 
   def install
     virtualenv_install_with_resources
+    system libexec/"bin/python", "-m", "pip", "install", "psycopg[binary,pool]"
   end
 
   test do
