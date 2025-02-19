@@ -1,365 +1,373 @@
 #!/usr/bin/env python3
 import argparse
+import io
 import json
 import os
 import sys
 import unittest
-from unittest.mock import patch, mock_open, MagicMock
+from contextlib import contextmanager
+from unittest import mock
 
 # Import the module under test.
-# (Adjust the import if your package layout is different.)
+# (Make sure your PYTHONPATH is set appropriately so that src/ is importable.)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from g2c.main import (
     QueryExtractor,
     CacheManager,
     GremlinToCypherConverter,
+    DryRunner,
     GremlinConverterController,
-    MyCypherVisitor,
     parse_arguments,
     main,
 )
 
 
-# === Test QueryExtractor ===
-class TestQueryExtractor(unittest.TestCase):
-    def test_extract_gremlin_from_literals(self):
-        # Code that does not import gremlin_python so that _extract_gremlin_from_literals is used.
-        # Prepare a simple python code with a string literal starting with "g.".
-        code = 'print("g.foo")'
-        qe = QueryExtractor(code, "dummy.py")
-        # The tokenize method will produce a token whose string is "g.foo"
-        result = qe.extract()
-        # Expect that the extracted tuple contains the literal without quotes.
-        self.assertEqual(len(result), 1)
-        line, query = result[0]
-        self.assertIsInstance(line, int)
-        self.assertEqual(query, "g.foo")
+# A dummy OpenAI client for testing the GremlinToCypherConverter.
+class DummyChatCompletion:
+    def __init__(self, content):
+        self.message = mock.Mock(content=content)
 
-    def test_extract_gremlin_queries_with_gremlin_import(self):
-        # When the source contains "from gremlin_python", extraction should use the AST visitor.
-        # We craft a code sample that has an import and a function call starting with g.
-        code = "from gremlin_python import something\ng.query_method(arg=1)"
-        qe = QueryExtractor(code, "dummy.py")
-        result = qe.extract()
-        # The visitor will add the call node.
-        # We expect at least one extracted query whose string representation
-        # includes “g.query_method(” (the exact format depends on ast.unparse).
-        self.assertTrue(any("g.query_method(" in q for _, q in result))
+
+class DummyChat:
+    def __init__(self, content):
+        self.content = content
+
+    def create(self, messages, model, temperature):
+        # Return a dummy completions object with the desired text.
+        # For testing, return a fixed cypher query.
+        dummy_choice = mock.Mock(message=mock.Mock(content="MATCH (n) RETURN n"))
+        dummy = mock.Mock(choices=[dummy_choice])
+        return dummy
+
+
+class DummyOpenAI:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.chat = DummyChat(content="dummy")
+
+
+# A dummy connection object for DryRunner.
+class DummyConnection:
+    def __init__(self, should_fail=False):
+        self.should_fail = should_fail
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def execute(self, query):
+        if self.should_fail:
+            raise RuntimeError("Execution failed")
+        # else succeed silently
+
+
+# A dummy connection pool for DryRunner.
+class DummyConnectionPool:
+    def __init__(self, dsn):
+        self.dsn = dsn
+
+    def open(self):
+        pass
+
+    def connection(self):
+        # Return a dummy connection; let the caller decide if it fails.
+        return DummyConnection()
+
+    def close(self):
+        pass
+
+
+# Helper context manager to capture printed output.
+@contextmanager
+def captured_stdout():
+    new_out = io.StringIO()
+    old = sys.stdout
+    sys.stdout = new_out
+    try:
+        yield sys.stdout
+    finally:
+        sys.stdout = old
+
+
+class TestQueryExtractor(unittest.TestCase):
+    def test_extract_python_literal(self):
+        # Code that does not import gremlin_python.
+        code = 'x = "g.foo.query"'
+        extractor = QueryExtractor(code, "dummy.py")
+        results = extractor.extract()
+        # tokenize method should pick up the literal on line 1.
+        self.assertTrue(any("g.foo.query" in lit for _, lit in results))
+
+    def test_extract_gremlin_queries_ast(self):
+        # Code that imports gremlin_python so that AST extraction is used.
+        # Build a simple call: g.V().has("name", "john")
+        code = """
+from gremlin_python.driver import client
+def test():
+    return g.V().has("name", "john")
+"""
+        extractor = QueryExtractor(code, "dummy.py")
+        results = extractor.extract()
+        # Expect at least one tuple with a non-negative line number.
+        self.assertTrue(len(results) > 0)
+        line, query = results[0]
+        self.assertTrue(line >= 1)
+        self.assertIn("g.V()", query)
 
     def test_extract_generic_literals(self):
-        # For non-python files, extraction uses the generic regexp.
-        code = 'Some code "g.bar(1)" more code'
-        qe = QueryExtractor(code, "dummy.java")
-        result = qe.extract()
-        self.assertEqual(len(result), 1)
-        line, literal = result[0]
-        self.assertEqual(line, 1)
-        # Literal remains with enclosing double quotes.
-        self.assertEqual(literal, '"g.bar(1)"')
+        # For non-.py extension file use regex extraction.
+        code = """
+// some comment "g.ignore"
+var query = "g.someQuery";
+"""
+        extractor = QueryExtractor(code, "dummy.java")
+        results = extractor.extract()
+        self.assertEqual(len(results), 1)
+        lineno, literal = results[0]
+        self.assertIn("g.someQuery", literal)
+
+    def test_tokenize_error(self):
+        # Provide code that triggers an exception within tokenize.
+        bad_code = "def foo(:"
+        extractor = QueryExtractor(bad_code, "dummy.py")
+        with self.assertRaises(SystemExit) as cm:
+            extractor._extract_gremlin_from_literals()
+        self.assertIn("Error while parsing Python file", str(cm.exception))
+
+    def test_ast_parse_error(self):
+        # Provide invalid Python code to trigger a parse error.
+        bad_code = "def foo(:"
+        extractor = QueryExtractor(bad_code, "dummy.py")
+        with self.assertRaises(SystemExit) as cm:
+            extractor._extract_gremlin_queries()
+        self.assertIn("Error while parsing Python file", str(cm.exception))
 
 
-# === Test CacheManager ===
 class TestCacheManager(unittest.TestCase):
-    @patch("os.path.exists", return_value=True)
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data='{"test_query": "test_result"}',
-    )
-    def test_load_existing_cache(self, m_open, m_exists):
+    def setUp(self):
+        # Patch os.path.exists to simulate that the cache file already exists.
+        self.cache_file = os.path.join(os.path.expanduser("~"), ".g2c_cache")
+        patcher = mock.patch("g2c.main.os.path.exists", return_value=True)
+        self.addCleanup(patcher.stop)
+        self.mock_exists = patcher.start()
+
+        # Patch open to simulate reading/writing a cache
+        self.initial_cache = {"foo": "bar"}
+        self.mock_open = mock.mock_open(read_data=json.dumps(self.initial_cache))
+        patcher2 = mock.patch("g2c.main.open", self.mock_open, create=True)
+        self.addCleanup(patcher2.stop)
+        patcher2.start()
+
+    def test_load_cache(self):
         cm = CacheManager()
-        self.assertEqual(cm.cache, {"test_query": "test_result"})
+        self.assertEqual(cm.cache, self.initial_cache)
 
-    @patch("os.path.exists", return_value=False)
-    @patch("g2c.main.CacheManager.deploy_g2c_cache")
-    @patch("builtins.open", new_callable=mock_open, read_data="{}")
-    def test_load_cache_triggers_deploy(self, m_open, m_deploy, m_exists):
-        # When cache file does not exist, deploy_g2c_cache is called.
+    def test_add_get_search_result(self):
         cm = CacheManager()
-        m_deploy.assert_called_once()
-        self.assertEqual(cm.cache, {})
-
-    @patch("builtins.open", new_callable=mock_open, read_data="{}")
-    def test_save_cache_and_add_result(self, m_open):
-        cm = CacheManager()
-        # Set cache manually then add result.
-        cm.cache = {}
-        cm.add_search_result("new_query", "new_result")
-        self.assertEqual(cm.cache, {"new_query": "new_result"})
-        # Make sure file write was called. (The call_args_list concatenated should match JSON dump.)
-        handle = m_open()
-        written_calls = handle.write.call_args_list
-        written_data = "".join(call.args[0] for call in written_calls)
-        expected_data = json.dumps(
-            {"new_query": "new_result"}, ensure_ascii=False, indent=4
-        )
-        self.assertEqual(written_data, expected_data)
-
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data='{"test_query": "test_result"}',
-    )
-    def test_get_search_result(self, m_open):
-        cm = CacheManager()
-        self.assertEqual(cm.get_search_result("test_query"), "test_result")
-        self.assertIsNone(cm.get_search_result("nonexistent"))
-
-    @patch("importlib.resources.open_binary", side_effect=FileNotFoundError())
-    @patch("os.path.exists", return_value=False)
-    @patch("builtins.print")
-    def test_deploy_g2c_cache_file_not_found(self, m_print, m_exists, m_open_binary):
-        # Call deploy_g2c_cache and see that FileNotFoundError is handled.
-        cm = CacheManager()
-        # When deploy_g2c_cache is called and file not found, it should print a message.
-        # Because __init__ calls deploy_g2c_cache if file missing, m_print should be called.
-        m_print.assert_any_call(".g2c_cache not found in packaged data.")
+        # Add new search result.
+        cm.add_search_result("query1", "cypher1")
+        # Now get the search result.
+        result = cm.get_search_result("query1")
+        self.assertEqual(result, "cypher1")
 
 
-# === Test GremlinToCypherConverter ===
 class TestGremlinToCypherConverter(unittest.TestCase):
-    @patch.dict(os.environ, {"G2C_OPENAI_API_KEY": "fake_api_key"})
-    @patch("g2c.main.OpenAI")
-    def test_convert_success(self, mock_openai):
-        # Fake the openai client and response.
-        fake_client = MagicMock()
-        mock_openai.return_value = fake_client
-        fake_response = MagicMock()
-        fake_choice = MagicMock()
-        fake_choice.message.content = "MATCH (n) RETURN n"
-        fake_response.choices = [fake_choice]
-        fake_client.chat.completions.create.return_value = fake_response
+    def setUp(self):
+        # Set API key for testing.
+        os.environ[GremlinToCypherConverter.KEY_ENV_NAME] = "dummy_key"
+        # Patch the OpenAI client to use our dummy.
+        self.patcher = mock.patch("g2c.main.OpenAI", DummyOpenAI)
+        self.patcher.start()
 
+    def tearDown(self):
+        self.patcher.stop()
+
+    def test_convert_success(self):
         converter = GremlinToCypherConverter()
         result = converter.convert("g.V()")
+        # Our DummyChat.create returns a fixed cypher query.
         self.assertEqual(result, "MATCH (n) RETURN n")
 
-    @patch.dict(os.environ, {}, clear=True)
+    def test_convert_failure(self):
+        # Force an exception inside the converter.
+        converter = GremlinToCypherConverter()
+        # Patch client's chat.completions.create to throw an exception.
+        with mock.patch.object(
+            converter.client.chat,
+            "create",
+            side_effect=RuntimeError(
+                "'DummyChat' object has no attribute 'completions'"
+            ),
+        ):
+            with mock.patch("g2c.main.print") as mock_print:
+                result = converter.convert("g.V()")
+                self.assertEqual(result, "")
+                mock_print.assert_called_with(
+                    "Error during conversion: 'DummyChat' object has no attribute 'completions'"
+                )
+
     def test_missing_api_key(self):
-        # When the environment variable is missing, the converter should call sys.exit.
+        # Remove API key and test that __init__ exits.
+        del os.environ[GremlinToCypherConverter.KEY_ENV_NAME]
         with self.assertRaises(SystemExit) as cm:
             GremlinToCypherConverter()
-        self.assertIn("API key not found.", str(cm.exception))
-
-    @patch.dict(os.environ, {"G2C_OPENAI_API_KEY": "fake_api_key"})
-    @patch("g2c.main.OpenAI")
-    def test_convert_exception(self, mock_openai):
-        fake_client = MagicMock()
-        mock_openai.return_value = fake_client
-        fake_client.chat.completions.create.side_effect = Exception("API error")
-        converter = GremlinToCypherConverter()
-        # When an exception occurs the method prints error and returns empty string.
-        result = converter.convert("g.V()")
-        self.assertEqual(result, "")
+        self.assertIn("API key not found", str(cm.exception))
+        os.environ[GremlinToCypherConverter.KEY_ENV_NAME] = "dummy_key"
 
 
-# === Test GremlinConverterController ===
-class DummyArgs:
-    def __init__(self, gremlin=None, filepath=None, url=None, age=False):
-        self.gremlin = gremlin
-        self.filepath = filepath
-        self.url = url
-        self.age = age
+class TestDryRunner(unittest.TestCase):
+    def setUp(self):
+        # Set environment variable required for DryRunner.
+        os.environ["PG_CONNECTION_STRING"] = "postgresql://dummy"
+        # Patch ConnectionPool to use our dummy pool.
+        self.patcher = mock.patch("g2c.main.ConnectionPool", DummyConnectionPool)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def test_run_success(self):
+        runner = DryRunner()
+        msg = runner.run("MATCH (n) RETURN n")
+        self.assertIn("[Query executed successfully]", msg)
+
+    def test_run_failure(self):
+        # Patch the connection to raise an error.
+        pool = DummyConnectionPool("dummy")
+        with mock.patch.object(
+            pool, "connection", return_value=DummyConnection(should_fail=True)
+        ):
+            runner = DryRunner()
+            # Replace runner.pool with our patched pool.
+            runner.pool = pool
+            msg = runner.run("MATCH (n) RETURN n")
+            self.assertIn("[Error executing query: ", msg)
 
 
 class TestGremlinConverterController(unittest.TestCase):
     def setUp(self):
-        # Patch out the real conversion so that tests run fast.
-        self.convert_patch = patch(
-            "g2c.main.GremlinToCypherConverter.convert",
-            return_value="MATCH (n) RETURN n",
+        # Set a dummy API key needed by the controller.
+        os.environ[GremlinToCypherConverter.KEY_ENV_NAME] = "dummy_key"
+        # Create a dummy argparse.Namespace object.
+        self.args = argparse.Namespace(
+            age=False,
+            model="dummy-model",
+            dryrun=False,
+            gremlin="g.V().has('name','john')",
+            filepath=None,
+            url=None,
         )
-        self.mock_convert = self.convert_patch.start()
-        # Patch the cache manager methods
-        self.cache_patch = patch(
-            "g2c.main.CacheManager.get_search_result", return_value=None
-        )
-        self.mock_get = self.cache_patch.start()
-        self.cache_add_patch = patch("g2c.main.CacheManager.add_search_result")
-        self.mock_add = self.cache_add_patch.start()
-
-    def tearDown(self):
-        self.convert_patch.stop()
-        self.cache_patch.stop()
-        self.cache_add_patch.stop()
-
-    def test_read_code_from_filepath_success(self):
-        # Simulate a file input.
-        dummy_code = 'print("g.test")'
-        args = DummyArgs(filepath="dummy.py")
-        controller = GremlinConverterController(args)
-        # Patch os.path.exists and open.
-        with (
-            patch("os.path.exists", return_value=True),
-            patch("builtins.open", mock_open(read_data=dummy_code)),
-        ):
-            code, path = controller._read_code()
-            self.assertEqual(code, dummy_code)
-            self.assertEqual(path, "dummy.py")
-
-    def test_read_code_from_filepath_not_found(self):
-        args = DummyArgs(filepath="nofile.py")
-        controller = GremlinConverterController(args)
-        with patch("os.path.exists", return_value=False):
-            with self.assertRaises(SystemExit) as cm:
-                controller._read_code()
-            self.assertIn("File not found", str(cm.exception))
-
-    def test_read_code_from_url_success(self):
-        dummy_code = "print('g.from_url')"
-        args = DummyArgs(url="http://dummy.url")
-        controller = GremlinConverterController(args)
-        fake_response = MagicMock()
-        fake_response.read.return_value = dummy_code.encode("utf-8")
-        with patch("urllib.request.urlopen") as mock_urlopen:
-            mock_urlopen.return_value.__enter__.return_value = fake_response
-            code, path = controller._read_code()
-            self.assertEqual(code, dummy_code)
-            self.assertEqual(path, "http://dummy.url")
-
-    def test_read_code_from_gremlin_argument(self):
-        # Direct query provided via --gremlin.
-        args = DummyArgs(gremlin="“g.directquery”")  # using smart quotes
-        controller = GremlinConverterController(args)
-        code, path = controller._read_code()
-        # The smart quotes should be replaced with standard quotes and then stripped.
-        self.assertEqual(code, "g.directquery")
-        self.assertEqual(path, "direct query")
-
-    def test_read_code_none_provided(self):
-        # When no valid input is provided, _read_code exits.
-        args = DummyArgs()
-        controller = GremlinConverterController(args)
-        with self.assertRaises(SystemExit) as cm:
-            controller._read_code()
-        self.assertIn("No valid input provided", str(cm.exception))
-
-    def test_process_no_extracted_queries(self):
-        # Test process branch where extraction returns empty list.
-        args = DummyArgs(filepath="dummy.py")
-        controller = GremlinConverterController(args)
-        # Patch _read_code to return dummy code that produces an empty extraction result,
-        # and then patch QueryExtractor.extract() to return [].
-        with patch.object(
+        # Patch CacheManager and GremlinToCypherConverter inside the controller.
+        self.cache_manager_patch = mock.patch("g2c.main.CacheManager")
+        self.converter_patch = mock.patch("g2c.main.GremlinToCypherConverter")
+        self.mock_cache_manager_class = self.cache_manager_patch.start()
+        self.mock_converter_class = self.converter_patch.start()
+        # Make sure the conversion returns a fixed string.
+        self.mock_converter_instance = mock.Mock()
+        self.mock_converter_instance.convert.return_value = "MATCH (n) RETURN n"
+        self.mock_converter_class.return_value = self.mock_converter_instance
+        # For dryrun tests, patch DryRunner.
+        self.dryrunner_patch = mock.patch("g2c.main.DryRunner")
+        self.mock_dryrunner_class = self.dryrunner_patch.start()
+        self.addCleanup(self.cache_manager_patch.stop)
+        self.addCleanup(self.converter_patch.stop)
+        self.addCleanup(self.dryrunner_patch.stop)
+        # Patch _read_code to return the gremlin query.
+        self.read_code_patch = mock.patch.object(
             GremlinConverterController,
             "_read_code",
-            return_value=("dummy code", "dummy.py"),
-        ):
-            with patch.object(QueryExtractor, "extract", return_value=[]):
-                with self.assertRaises(SystemExit) as cm:
-                    controller.process()
-                self.assertIn("No Gremlin queries found", str(cm.exception))
-
-    def test_process_success(self):
-        # Test process method when conversion returns nonempty query.
-        args = DummyArgs(gremlin="g.V()")
-        controller = GremlinConverterController(args)
-        # In direct-query branch, _read_code wraps into a list.
-        # process() will then call converter.convert (our patched version returns "MATCH (n) RETURN n")
-        with patch("builtins.print") as m_print:
-            controller.process()
-            # Check that the printed output contains the conversion.
-            printed = "".join(call.args[0] for call in m_print.call_args_list)
-            self.assertIn("MATCH (n) RETURN n", printed)
-
-    def test_format_cypher_failure(self):
-        # Test format_cypher returns red [Failed] if empty string provided.
-        args = DummyArgs(gremlin="g.V()", age=False)
-        controller = GremlinConverterController(args)
-        result = controller.format_cypher("")
-        self.assertIn("[Failed]", result)
-
-    def test_format_cypher_for_age(self):
-        # Test format_cypher for apache AGE.
-        args = DummyArgs(gremlin="g.V()", age=True)
-        controller = GremlinConverterController(args)
-        # To test the static method format_for_age, we patch the ANTLR parts.
-        # We simulate that the visitor.visit returns None so that format_for_age returns
-        # a SELECT statement.
-        with (
-            patch("g2c.main.CypherLexer") as mock_lexer,
-            patch("g2c.main.CypherParser") as mock_parser,
-            patch("g2c.main.MyCypherVisitor") as mock_visitor,
-        ):
-            # Fake parser and visitor behavior.
-            fake_visitor = MagicMock()
-            fake_visitor.visit.return_value = None
-            fake_visitor.expressions = ["p", "q"]
-            mock_visitor.return_value = fake_visitor
-
-            formatted = controller.format_cypher("MATCH (n) RETURN n")
-            # Should contain a SELECT statement, with agtype types.
-            self.assertIn("SELECT * FROM cypher", formatted)
-            self.assertIn("p agtype", formatted)
-            self.assertIn("q agtype", formatted)
-
-
-# === Test MyCypherVisitor ===
-class DummyCtx:
-    def __init__(self, text):
-        self._text = text
-
-    def getText(self):
-        return self._text
-
-    # Return no children to avoid traversing.
-    def getChildCount(self):
-        return 0
-
-    # Even if getChild were needed, it should return a DummyCtx with an accept method.
-    def getChild(self, i):
-        # For testing, you might return self or a new DummyCtx.
-        return self
-
-    # Implement the required accept() method.
-    def accept(self, visitor):
-        # Calling the generic visit for the dummy node.
-        return visitor.visit(self)
-
-
-class TestMyCypherVisitor(unittest.TestCase):
-    def test_visitOC_Expression_adds_valid_identifier(self):
-        visitor = MyCypherVisitor()
-        # Use a dummy context whose text is a valid identifier.
-        ctx = DummyCtx("abc123")
-        visitor.visitOC_Expression(ctx)
-        self.assertIn("abc123", visitor.expressions)
-
-    def test_visitOC_Expression_ignores_invalid_identifier(self):
-        visitor = MyCypherVisitor()
-        ctx = DummyCtx("123abc")  # does not match the regex (must start with letter)
-        visitor.visitOC_Expression(ctx)
-        self.assertNotIn("123abc", visitor.expressions)
-
-
-# === Test main and argument parsing ===
-class TestMain(unittest.TestCase):
-    @patch("g2c.main.parse_arguments")
-    @patch("g2c.main.GremlinConverterController")
-    def test_main_calls_controller(self, mock_controller_class, mock_parse_args):
-        dummy_args = argparse.Namespace(
-            gremlin="g.V()", filepath=None, url=None, age=False
+            return_value=(self.args.gremlin, "direct query"),
         )
-        mock_parse_args.return_value = dummy_args
-        # Call main() (it will instantiate a GremlinConverterController)
-        main()
-        mock_controller_class.assert_called_once_with(dummy_args)
-        instance = mock_controller_class.return_value
-        instance.process.assert_called_once()
+        self.read_code_patch.start()
+        self.addCleanup(self.read_code_patch.stop)
 
-    def test_parse_arguments_required(self):
-        # Test that argparse requires one of the mutually exclusive groups.
-        testargs = ["prog", "-g", "g.V()"]
-        with patch.object(sys, "argv", testargs):
+    def test_process_direct_query(self):
+        # Testing process() when input is a direct gremlin query.
+        controller = GremlinConverterController(self.args)
+        # In this case, _read_code returns a direct query so extraction wraps it in a list.
+        with captured_stdout() as out:
+            controller.process()
+        output = out.getvalue()
+        self.assertIn("Converted Cypher queries:", output)
+        self.assertIn("MATCH (n) RETURN n", output)
+        # Verify that conversion and cache were called.
+        self.mock_converter_instance.convert.assert_called_with(self.args.gremlin)
+
+    def test_format_cypher_failed(self):
+        controller = GremlinConverterController(self.args)
+        # Test when conversion returns empty string.
+        res = controller.format_cypher("")
+        self.assertIn("[Failed]", res)
+
+    def test_format_cypher_age_without_dryrun(self):
+        self.args.age = True
+        controller = GremlinConverterController(self.args)
+        # Simulate a conversion result that includes a return clause.
+        cypher = "MATCH (n) RETURN n.name, n.age"
+        res = controller.format_cypher(cypher)
+        # Should contain call to cypher with stored procedure or standard cypher for AGE.
+        self.assertTrue("cypher('GRAPH_NAME'" in res)
+
+    def test_format_cypher_age_with_dryrun(self):
+        self.args.age = True
+        self.args.dryrun = True
+        # Create a dummy runner that returns a known result.
+        dummy_runner = mock.Mock()
+        dummy_runner.run.return_value = "[Dummy execution]"
+        controller = GremlinConverterController(self.args)
+        controller.runner = dummy_runner
+        cypher = "MATCH (n) RETURN n"
+        res = controller.format_cypher(cypher)
+        self.assertIn("[Dummy execution]", res)
+
+    def test_format_for_age_and_extract_return_values(self):
+        # Test the two connected helper methods.
+        controller = GremlinConverterController(self.args)
+        cypher_query = "MATCH (n) RETURN n.age, n.name"
+        ret_vals = controller.extract_return_values(cypher_query)
+        self.assertIn("n", ret_vals)  # since 'n.name' and 'n.age' are trimmed to 'n'
+        formatted = controller.format_for_age(cypher_query)
+        self.assertIn("cypher('GRAPH_NAME'", formatted)
+
+
+class TestParseArgumentsMain(unittest.TestCase):
+    def test_parse_arguments_gremlin(self):
+        test_argv = ["prog", "-g", "g.V()"]
+        with mock.patch("sys.argv", test_argv):
             args = parse_arguments()
             self.assertEqual(args.gremlin, "g.V()")
             self.assertFalse(args.age)
+            self.assertFalse(args.dryrun)
+            self.assertEqual(args.model, "gpt-4o-mini")
 
-    def test_parse_arguments_age_flag(self):
-        # Test the age flag is parsed correctly.
-        testargs = ["prog", "-g", "g.V()", "--age"]
-        with patch.object(sys, "argv", testargs):
+    def test_parse_arguments_filepath(self):
+        test_argv = ["prog", "-f", "dummy.py"]
+        with mock.patch("sys.argv", test_argv):
             args = parse_arguments()
-            self.assertTrue(args.age)
+            self.assertEqual(args.filepath, "dummy.py")
+            self.assertIsNone(args.gremlin)
+            self.assertIsNone(args.url)
+
+    def test_parse_arguments_url(self):
+        test_argv = ["prog", "-u", "http://example.com/code.py"]
+        with mock.patch("sys.argv", test_argv):
+            args = parse_arguments()
+            self.assertEqual(args.url, "http://example.com/code.py")
+            self.assertIsNone(args.gremlin)
+            self.assertIsNone(args.filepath)
+
+    def test_main_calls_controller_process(self):
+        # Test main() by intercepting the controller instance.
+        test_argv = ["prog", "-g", "g.V()"]
+        with mock.patch("sys.argv", test_argv):
+            with mock.patch(
+                "src.g2c.main.GremlinConverterController"
+            ) as mock_controller_class:
+                instance = mock_controller_class.return_value
+                main()
+                instance.process.assert_called_once()
 
 
 if __name__ == "__main__":

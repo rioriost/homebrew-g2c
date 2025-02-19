@@ -3,8 +3,8 @@ class G2c < Formula
 
   desc "g2c is a python script to convert Gremlin query to Cypher query with OpenAI API"
   homepage "https://github.com/rioriost/homebrew-g2c/"
-  url "https://files.pythonhosted.org/packages/2b/4b/e18aef88a172e87985e0c065786eec93153e0c39e13f739a9c7c43a48e54/g2c-0.3.0.tar.gz"
-  sha256 "f85fa86431a2e9389071150293a55042dcc2aa1874b07c3aabcaede6f2a0f9a2"
+  url "https://files.pythonhosted.org/packages/8a/4e/a772e58096272f40205dffbd1de96ae2753842b046c2cc8a580f388f35be/g2c-0.4.0.tar.gz"
+  sha256 "ac580c3651f3fdafd4fa0adc0a2a057d0fbe1c8facd50cd73b5db6256ddc12f7"
   license "MIT"
 
   depends_on "python@3.11"
@@ -77,7 +77,6 @@ class G2c < Formula
 
   def install
     virtualenv_install_with_resources
-    system libexec/"bin/python", "-m", "pip", "install", "antlr4-python3-runtime"
   end
 
   test do

@@ -34,13 +34,16 @@ Execute g2c command.
 
 ```bash
 g2c --help
-usage: g2c [-h] [-a] (-g GREMLIN | -f FILEPATH | -u URL)
+usage: g2c [-h] [-a] [-m MODEL] [-d] (-g GREMLIN | -f FILEPATH | -u URL)
 
 Convert Gremlin queries to Cypher queries.
 
 options:
   -h, --help            show this help message and exit
   -a, --age             Convert to the Cypher query for Apache AGE.
+  -m MODEL, --model MODEL
+                        OpenAI model to use.
+  -d, --dryrun          Dry run with PostgreSQL. Requires a valid PostgreSQL connection string as 'PG_CONNECTION_STRING' environment variable.
   -g GREMLIN, --gremlin GREMLIN
                         The Gremlin query to convert.
   -f FILEPATH, --filepath FILEPATH
@@ -63,43 +66,40 @@ MATCH (a {name: "Alice"}), (b {name: "Bob"}) RETURN a.name AS a, b.name AS b
 with -u(--url)
 
 ```bash
-g2c --url https://raw.githubusercontent.com/nedlowe/gremlin-python-example/refs/heads/master/app.py
+g2c -u https://raw.githubusercontent.com/nedlowe/gremlin-python-example/refs/heads/master/app.py
 Converted Cypher queries:
 
 line 42, g.V(person_id).toList() ->
-MATCH (p) WHERE id(p) = person_id RETURN p
+MATCH (n) WHERE id(n) = $person_id RETURN n
 
 line 42, g.V(person_id) ->
-MATCH (n) WHERE id(n) = person_id RETURN n
+MATCH (n) WHERE id(n) = $person_id RETURN n
 
 line 55, g.V(vertex).valueMap().toList() ->
-MATCH (n) WHERE id(n) = $vertex RETURN n
+MATCH (n) WHERE ID(n) = $vertex RETURN properties(n)
 
 line 55, g.V(vertex).valueMap() ->
-MATCH (n) WHERE id(n) = $vertex RETURN n
-
-line 55, g.V(vertex) ->
-MATCH (n) WHERE id(n) = vertex RETURN n
-
-line 77, g.addV('person').property(T.id, person_id).next() ->
-CREATE (n:person {id: person_id})
+MATCH (n) WHERE ID(n) = $vertex RETURN properties(n)
 ......
 ```
 
 with -f(--filepath)
 
 ```bash
-g2c --file ~/Desktop/g.py
+g2c -f ~/Desktop/gremlin_samples.py
 Converted Cypher queries:
 
-line 1, "g.V()" ->
+line 1, g.V() ->
 MATCH (n) RETURN n
 
-line 3, "g.E()" ->
-MATCH ()-[r]->() RETURN r
+line 2, g.E() ->
+MATCH ()-[r]-() RETURN r
 
-line 4, "g.V('vertexId')" ->
-MATCH (n) WHERE id(n) = 'vertexId' RETURN n
+line 3, g.V().hasLabel('person') ->
+MATCH (n:person) RETURN n
+
+line 4, g.V().hasLabel('software') ->
+MATCH (n:software) RETURN n
 ......
 ```
 
@@ -110,10 +110,39 @@ g2c -a -g "g.V().hasLabel('person').aggregate('a')"
 Converted Cypher queries:
 
 line 1, g.V().hasLabel('person').aggregate('a') ->
-SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n:person) WITH collect(n) AS a RETURN a $$) AS (a agtype, n agtype);
+SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n:person) WITH collect(n) AS a RETURN a $$) AS (a agtype);
+```
+
+with -d(--dryrun)
+
+```bash
+g2c -d -g "g.V().hasLabel('person').aggregate('a')"
+Converted Cypher queries:
+
+line 1, g.V().hasLabel('person').aggregate('a') ->
+SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n:person) WITH collect(n) AS a RETURN a $$) AS (a agtype);
+[Query executed successfully]
+```
+
+```bash
+g2c -d -g "g.V(person).property(prop_name, prop_value)"
+Converted Cypher queries:
+
+line 1, g.V(person).property(prop_name, prop_value) ->
+DEALLOCATE ALL; PREPARE cypher_stored_procedure(agtype) AS SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n) WHERE ID(n) = $person SET n[$prop_name] = $prop_value RETURN n $$, $1) AS (n agtype);EXECUTE cypher_stored_procedure('{"person": 12345, "prop_name": 12345, "prop_value": 12345}');
+[Error executing query: SET clause expects a property name
+LINE 1: ...APH_NAME', $$ MATCH (n) WHERE ID(n) = $person SET n[$prop_na...
+                                                             ^]
 ```
 
 ## Release Notes
+
+### 0.4.0 Release
+* Stopped to use antlr to analyze the Cypher query, removed the dependencies to antlr and generated lexer, parser, and visitor.
+* Added '--model' argument to enable switching the default model, 'gpt-4o-mini' to others such as 'o3-mini' and so on.
+  If you have an OpenAI subscription to use smarter models, strongly recommended to use them.
+* Added '--dryrun' argument to enable dry run mode. If dryrun is true, this script will try to connect to PostgreSQL with Apache AGE extension and to execute the converted Cypher query.
+  It requires PG_CONNECTION_STRING environment variable for 'TESTING' PostgreSQL.
 
 ### 0.3.0 Release
 * Refactored the code
@@ -130,6 +159,3 @@ SELECT * FROM cypher('GRAPH_NAME', $$ MATCH (n:person) WITH collect(n) AS a RETU
 
 ## License
 MIT License
-
-Cypher.interp, Cypher.tokens, CypherLexer.interp, CypherLexer.py, CypherLexer.tokens, CypherListener.py, CypherParser.py, and CypherVisitor.py under src/g2c/ were generated from [Cypher.g4](https://github.com/cloudprivacylabs/opencypher/blob/main/Cypher.g4)
-Apache License, Version 2.0
