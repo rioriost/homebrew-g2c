@@ -137,6 +137,15 @@ LINE 1: ...APH_NAME', $$ MATCH (n) WHERE ID(n) = $person SET n[$prop_na...
 
 ## Release Notes
 
+### 0.4.3 Release
+* Updated for the dependencies
+
+### 0.4.2 Release
+* Fixed a small bug
+
+### 0.4.1 Release
+* Updated for the dependencies
+
 ### 0.4.0 Release
 * Stopped to use antlr to analyze the Cypher query, removed the dependencies to antlr and generated lexer, parser, and visitor.
 * Added '--model' argument to enable switching the default model, 'gpt-4o-mini' to others such as 'o3-mini' and so on.

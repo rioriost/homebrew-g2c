@@ -3,16 +3,16 @@ class G2c < Formula
 
   desc "g2c is a python script to convert Gremlin query to Cypher query with OpenAI API"
   homepage "https://github.com/rioriost/homebrew-g2c/"
-  url "https://files.pythonhosted.org/packages/95/48/057827e531f292219e14d0976e07d301678ff2e8668c3e38435edec08932/g2c-0.4.1.tar.gz"
-  sha256 "3d643c0588b8223631b468cef8e484698c1bce4cba8ee444fa92c7df649e54b7"
+  url "https://files.pythonhosted.org/packages/78/28/309d115a463649c49243be79832ab4dcc52eafe52d9b210cd26e8ee5d896/g2c-0.4.3.tar.gz"
+  sha256 "51453b8a7dacb680ea53df70523073c2cb170e7fa0d6a2c0857abe69f441fda3"
   license "MIT"
 
   depends_on "python@3.11"
   depends_on "rust" => :build
 
   resource "openai" do
-    url "https://files.pythonhosted.org/packages/e6/1c/11b520deb71f9ea54ced3c52cd6a5f7131215deba63ad07f23982e328141/openai-1.63.2.tar.gz"
-    sha256 "aeabeec984a7d2957b4928ceaa339e2ead19c61cfcf35ae62b7c363368d26360"
+    url "https://files.pythonhosted.org/packages/7b/1d/aae78d8ecc571d672c4a27794a8f248bc46437a22ddcb9c4eb6fd6616c03/openai-1.64.0.tar.gz"
+    sha256 "2861053538704d61340da56e2f176853d19f1dc5704bc306b7597155f850d57a"
   end
 
   resource "certifi" do
