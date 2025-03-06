@@ -3,6 +3,11 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
+## Obsoleted
+
+Integrated into [AGEFreighter](https://github.com/rioriost/agefreighter).
+g2c is no longer maintained.
+
 ## Overview
 
 g2c is a python script to convert Gremlin query to Cypher query with OpenAI API
